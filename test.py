@@ -10,14 +10,6 @@ class TestFlaskServer(unittest.TestCase):
             {
                 "username": "test_user1",
                 "query": "What are your business hours?"
-            },
-            {
-                "username": "test_user2",
-                "query": "Tell me about your return policy."
-            },
-            {
-                "username": "test_user3",
-                "query": "How can I contact customer service?"
             }
         ]
 

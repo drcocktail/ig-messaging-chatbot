@@ -73,31 +73,9 @@ app.post('/webhooks', (req, res) => {
                 if (entry.messaging) {
                     entry.messaging.forEach((messagingEvent) => {
                         console.log('Processing message:', messagingEvent);
-                        // handleMessage(messagingEvent);
-                        if (messagingEvent.message.text && !messagingEvent.message.is_echo) {
-                            const senderID = messagingEvent.sender.id;
-                            const message = messagingEvent.message.text;
-                            /* {axios.post(
-                                'https://graph.instagram.com/v21.0/me/messages',
-                                {
-                                    recipient: { id: senderID },
-                                    message: { text: "Hello, I am a bot" }
-                                },
-                                {
-                                    headers: {
-                                        Authorization: `Bearer ${ACCESS_TOKEN}`,
-                                        'Content-Type': 'application/json'
-                                    }
-                                }
-                            )
-                            .then((response) => {
-                                console.log('Message sent successfully:', response.data);
-                            })
-                            .catch((error) => {
-                                console.error('Error sending message to Instagram:', error);
-                            });} */
-                            handleMessage(senderID, message);
-                        }
+                        messageText = messagingEvent.message.text;
+                        console.log('Message:', messageText);
+                        senderID = messagingEvent.sender.id;
                     });
                 }
             });
@@ -124,43 +102,22 @@ function verifySignature(payload, signature) {
 // Updated handle message function to process messages through Flask
 async function handleMessage(senderID, messageText){
     try {
-        const payload = (
-            {
-                username: senderID,
-                query: messageText
-            }
-        );
-
         const response = await axios.post(
-            `${FLASK_SERVER}/query`,
-            json = payload, 
-            headers = {'Content-Type': 'application/json'}
-        );
-
-        const sendMessage = await axios.post(
-            'https://graph.instagram.com/v21.0/me/messages',
+            `${FLASK_SERVER}/message`,
             {
-                recipient: { id: senderID },
-                message: { text: response.data.response }
-            },
-            {
-                headers: {
-                    Authorization: `Bearer ${ACCESS_TOKEN}`,
-                    'Content-Type': 'application/json'
-                }
+                senderID: senderID,
+                message: messageText
             }
-        )
-
-        console.log('Message sent successfully:', sendMessage.data);
+        );
     }
     catch (error) {
         console.error('Error sending message to Flask:', error);
         throw error;
     }
+    console.log('Message sent to Flask');
+    console.log(response.data);
 }
 
-
-/*
 // Function to send messages back to Instagram
 async function sendInstagramMessage(recipientId, message) {
     try {
@@ -183,9 +140,9 @@ async function sendInstagramMessage(recipientId, message) {
         console.error('Error sending message to Instagram:', error);
         throw error;
     }
-} */
+}
 
-const PORT = process.env.PORT || 69; 
+const PORT = process.env.PORT || 6900; 
 app.listen(PORT, () => {
     console.log(`Server is running on port ${PORT}`);
 });
