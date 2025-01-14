@@ -12,38 +12,224 @@ const VERIFY_TOKEN = process.env.VERIFY_TOKEN;
 const APP_SECRET = process.env.APP_SECRET;
 const ACCESS_TOKEN = process.env.ACCESS_TOKEN;  
 const IG_ID = process.env.IG_ID;
-console.log (VERIFY_TOKEN);
-console.log (APP_SECRET);
-console.log (ACCESS_TOKEN);
-console.log(IG_ID);
-
-
 const FLASK_SERVER = 'http://localhost:3000';
 
+class ConversationManager {
+    async getConversationId(userId) {
+        try {
+            // Using correct v21.0 endpoint as per documentation
+            const response = await axios.get(
+                `https://graph.instagram.com/v21.0/me/conversations`,
+                {
+                    params: {
+                        user_id: userId,
+                        platform: 'instagram',
+                        access_token: ACCESS_TOKEN
+                    }
+                }
+            );
+            
+            if (!response.data.data.length) {
+                console.log(`No conversation found for user ${userId}`);
+                return null;
+            }
+            
+            return response.data.data[0].id;
+        } catch (error) {
+            console.error('Error getting conversation ID:', error);
+            throw error;
+        }
+    }
+
+    async fetchMessages(conversationId) {
+        try {
+            // Using correct endpoint structure from documentation
+            const response = await axios.get(
+                `https://graph.instagram.com/v21.0/${conversationId}`,
+                {
+                    params: {
+                        fields: 'messages{id,created_time,from,to,message}',
+                        access_token: ACCESS_TOKEN
+                    }
+                }
+            );
+            
+            // Extract messages from the nested structure
+            return response.data.messages?.data || [];
+        } catch (error) {
+            console.error('Error fetching messages:', error);
+            throw error;
+        }
+    }
+
+    async getMessageDetails(messageId) {
+        try {
+            // Implementation of individual message fetching as per documentation
+            const response = await axios.get(
+                `https://graph.instagram.com/v21.0/${messageId}`,
+                {
+                    params: {
+                        fields: 'id,created_time,from,to,message',
+                        access_token: ACCESS_TOKEN
+                    }
+                }
+            );
+            return response.data;
+        } catch (error) {
+            console.error('Error fetching message details:', error);
+            throw error;
+        }
+    }
+
+    async syncConversation(userId) {
+        try {
+            console.log(`Syncing conversation for user ${userId}`);
+            
+            // Get local conversation history
+            const localHistory = await this.getLocalHistory(userId);
+            
+            // Get Instagram conversation
+            const conversationId = await this.getConversationId(userId);
+            if (!conversationId) {
+                console.log('No conversation found on Instagram');
+                return [];
+            }
+
+            // Fetch messages with proper fields
+            const messages = await this.fetchMessages(conversationId);
+            console.log(`Fetched ${messages.length} messages from Instagram`);
+
+            // Deduplicate messages based on message ID
+            const existingIds = new Set(localHistory.map(msg => msg.id));
+            const newMessages = messages.filter(msg => !existingIds.has(msg.id));
+
+            // If there are new messages, store them
+            if (newMessages.length > 0) {
+                await this.storeConversation(userId, [...localHistory, ...newMessages]);
+            }
+            
+            return messages;
+        } catch (error) {
+            console.error('Error syncing conversation:', error);
+            throw error;
+        }
+    }
+
+    async getLocalHistory(userId) {
+        try {
+            const response = await axios.get(`${FLASK_SERVER}/conversation_history/${userId}`);
+            return response.data.history || [];
+        } catch (error) {
+            if (error.response && error.response.status === 404) {
+                return [];
+            }
+            console.error('Error getting local history:', error);
+            throw error;
+        }
+    }
+
+    async storeConversation(userId, messages) {
+        try {
+            console.log(`Storing ${messages.length} messages for user ${userId}`);
+            const response = await axios.post(
+                `${FLASK_SERVER}/store_conversation`,
+                {
+                    username: userId,
+                    history: messages
+                }
+            );
+            console.log('Store response:', response.data);
+            return response.data;
+        } catch (error) {
+            console.error('Error storing conversation:', error);
+            throw error;
+        }
+    }
+}
+
+class MessageHandler {
+    constructor() {
+        this.conversationManager = new ConversationManager();
+    }
+
+    async handleMessage(senderID, messageText) {
+        try {
+            console.log(`Processing message from ${senderID}: ${messageText}`);
+
+            // Sync conversation before processing
+            await this.conversationManager.syncConversation(senderID);
+
+            // Process message with Flask server
+            const response = await this.processMessage(senderID, messageText);
+            
+            // Send response back to Instagram
+            await this.sendResponse(senderID, response);
+
+            // Sync again to capture the new message
+            await this.conversationManager.syncConversation(senderID);
+
+        } catch (error) {
+            console.error('Error handling message:', error);
+            throw error;
+        }
+    }
+
+    async processMessage(senderID, messageText) {
+        try {
+            const response = await axios.post(
+                `${FLASK_SERVER}/query`,
+                {
+                    username: senderID,
+                    query: messageText
+                }
+            );
+            return response.data.response;
+        } catch (error) {
+            console.error('Error processing message:', error);
+            throw error;
+        }
+    }
+
+    async sendResponse(senderID, message) {
+        try {
+            const response = await axios.post(
+                'https://graph.instagram.com/v21.0/me/messages',
+                {
+                    recipient: { id: senderID },
+                    message: { text: message }
+                },
+                {
+                    params: {
+                        access_token: ACCESS_TOKEN
+                    },
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                }
+            );
+            console.log('Response sent successfully');
+            return response.data;
+        } catch (error) {
+            console.error('Error sending response:', error);
+            throw error;
+        }
+    }
+}
+
+// Initialize message handler
+const messageHandler = new MessageHandler();
+
+// Webhook verification endpoint
 app.get('/webhooks', (req, res) => {
-    // Parse the query params
     const mode = req.query['hub.mode'];
     const token = req.query['hub.verify_token'];
     const challenge = req.query['hub.challenge'];
 
-    console.log('Received webhook verification:');
-    console.log('Mode:', mode);
-    console.log('Token:', token);
-    console.log('Challenge:', challenge);
-
-    // For Instagram, we need to be more explicit about the checks
-    if (!mode || !token || !challenge) {
-        console.error('Missing required parameters');
-        return res.sendStatus(403);
-    }
-
-    if (mode === 'subscribe' && token === process.env.VERIFY_TOKEN) {
+    if (mode === 'subscribe' && token === VERIFY_TOKEN) {
         console.log('WEBHOOK_VERIFIED');
-        // Instagram specifically needs the challenge returned as a string
         return res.status(200).send(challenge);
     }
-
-    console.error('Verification failed');
+    
     return res.sendStatus(403);
 });
 
@@ -51,37 +237,33 @@ app.get('/webhooks', (req, res) => {
 app.post('/webhooks', (req, res) => {
     const signature = req.headers['x-hub-signature-256'];
     
-    // Verify Instagram signature first
     if (!verifySignature(req.body, signature)) {
         console.error('Invalid signature');
         return res.sendStatus(403);
     }
 
-    const body = req.body;
+    console.log('Received webhook:', JSON.stringify(req.body, null, 2));
 
-    console.log('Received webhook:', JSON.stringify(body, null, 2));
-
-    // Instagram specific object check
-    if (body.object === 'instagram') {
-        // Send the OK response immediately as required by Instagram
+    if (req.body.object === 'instagram') {
         res.status(200).send('EVENT_RECEIVED');
 
-        // Process the Instagram updates
-        if (body.entry && body.entry.length > 0) {
-            body.entry.forEach((entry) => {
-                // Handle Instagram messaging specific events
+        if (req.body.entry && req.body.entry.length > 0) {
+            req.body.entry.forEach((entry) => {
                 if (entry.messaging) {
                     entry.messaging.forEach((messagingEvent) => {
-                        console.log('Processing message:', messagingEvent);
-                        messageText = messagingEvent.message.text;
-                        console.log('Message:', messageText);
-                        senderID = messagingEvent.sender.id;
+                        if (messagingEvent.message && 
+                            messagingEvent.message.text && 
+                            !messagingEvent.message.is_echo) {
+                            messageHandler.handleMessage(
+                                messagingEvent.sender.id,
+                                messagingEvent.message.text
+                            ).catch(console.error);
+                        }
                     });
                 }
             });
         }
     } else {
-        // Not from Instagram
         res.sendStatus(404);
     }
 });
@@ -99,50 +281,7 @@ function verifySignature(payload, signature) {
     );
 }
 
-// Updated handle message function to process messages through Flask
-async function handleMessage(senderID, messageText){
-    try {
-        const response = await axios.post(
-            `${FLASK_SERVER}/message`,
-            {
-                senderID: senderID,
-                message: messageText
-            }
-        );
-    }
-    catch (error) {
-        console.error('Error sending message to Flask:', error);
-        throw error;
-    }
-    console.log('Message sent to Flask');
-    console.log(response.data);
-}
-
-// Function to send messages back to Instagram
-async function sendInstagramMessage(recipientId, message) {
-    try {
-        const response = await axios.post(
-            `https://graph.instagram.com/v21.0/me/messages`,
-            {
-                recipient: { id: recipientId },
-                message: { text: message }
-            },
-            {
-                headers: {
-                    'Authorization': `Bearer ${ACCESS_TOKEN}`,
-                    'Content-Type': 'application/json'
-                }
-            }
-        );
-        console.log('Message sent successfully:', response.data);
-        return response.data;
-    } catch (error) {
-        console.error('Error sending message to Instagram:', error);
-        throw error;
-    }
-}
-
-const PORT = process.env.PORT || 6900; 
+const PORT = process.env.PORT || 69;
 app.listen(PORT, () => {
     console.log(`Server is running on port ${PORT}`);
 });
