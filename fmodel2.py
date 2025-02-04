@@ -7,7 +7,9 @@ import chromadb
 import os
 import PyPDF2
 from typing import List, Optional
-
+from dotenv import load_dotenv
+load_dotenv() 
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 
 prompt = """You are a conversational AI assistant designed to interact with users on Instagram. Your goal is to provide helpful, engaging, and context-aware responses. 
 
@@ -44,7 +46,7 @@ You have two response options:
 app = FastAPI()
 
 # Configure Google Generative AI
-genai.configure(api_key="AIzaSyCRIlcoUu4P1xqTfXq4A4XPXDWoie7F3zg")
+genai.configure(api_key=GOOGLE_API_KEY)
 model = genai.GenerativeModel('gemini-1.5-flash')
 
 client = chromadb.Client()
